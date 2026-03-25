@@ -1,0 +1,15 @@
+.claude/settings.local.json
+.vscode/
+.idea/
+*.DS_Store
+
+# Maven
+target/
+
+# Java
+*.class
+*.jar
+*.war
+
+# Logs
+logs/
