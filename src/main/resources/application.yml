@@ -1,0 +1,21 @@
+spring:
+  application:
+    name: tqh-bus-ticket
+  profiles:
+    active: dev
+
+server:
+  port: 8080
+
+logging:
+  level:
+    com.tqh.bus.ticket: INFO
+
+tqh:
+  base-url: https://api.com
+  auth-token: "请手动配置"
+  route-id: 275
+  boarding-point-id: 24
+  alighting-point-id: 400
+  monitor-interval: 30
+  log-file-path: ./logs/ticket.log
