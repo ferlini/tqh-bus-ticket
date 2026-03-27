@@ -1,0 +1,7 @@
+logging:
+  level:
+    com.tqh.bus.ticket: INFO
+
+tqh:
+  base-url: https://your-api-domain.com
+  auth-token: "your-auth-token-here"
