@@ -1,0 +1,12 @@
+logging:
+  level:
+    com.tqh.bus.ticket: DEBUG
+
+tqh:
+  base-url: https://your-api-domain.com
+  auth-token: "your-auth-token-here"
+  route-id: 275
+  boarding-point-id: 24
+  alighting-point-id: 400
+  monitor-interval: 30
+  log-file-path: /path/to/dev/logs/ticket.log
