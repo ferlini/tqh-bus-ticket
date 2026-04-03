@@ -15,6 +15,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
@@ -50,10 +51,8 @@ class TicketMonitorServiceTest {
         given(apiClient.findSchedules(275))
                 .willReturn(Map.of("07:40", List.of(item25, item26)));
 
+        given(orderService.findPaidOrderDates(eq(275), anyInt(), any())).willReturn(Set.of());
         given(orderService.tryCreateOrder(any())).willReturn(true);
-
-        CreateOrderResponse orderResponse = new CreateOrderResponse();
-        orderResponse.setWxOrderId(572468);
 
         List<LocalDate> targetDates = List.of(
                 LocalDate.of(2026, 3, 25),
@@ -78,6 +77,7 @@ class TicketMonitorServiceTest {
         given(apiClient.findSchedules(275))
                 .willReturn(Map.of("07:40", List.of(withTickets, noTickets)));
 
+        given(orderService.findPaidOrderDates(eq(275), anyInt(), any())).willReturn(Set.of());
         given(orderService.tryCreateOrder(any())).willReturn(true);
 
         List<LocalDate> targetDates = List.of(
@@ -102,6 +102,7 @@ class TicketMonitorServiceTest {
         given(apiClient.findSchedules(275))
                 .willReturn(Map.of("07:40", List.of(item25, item26)));
 
+        given(orderService.findPaidOrderDates(eq(275), anyInt(), any())).willReturn(Set.of());
         given(orderService.tryCreateOrder(any())).willReturn(true);
 
         List<LocalDate> targetDates = List.of(
@@ -127,6 +128,7 @@ class TicketMonitorServiceTest {
         given(apiClient.findSchedules(275))
                 .willReturn(Map.of("07:40", List.of(item25, item26)));
 
+        given(orderService.findPaidOrderDates(eq(275), anyInt(), any())).willReturn(Set.of());
         given(orderService.tryCreateOrder(item25)).willThrow(new BusinessException("网络超时"));
         given(orderService.tryCreateOrder(item26)).willReturn(true);
 
@@ -151,6 +153,7 @@ class TicketMonitorServiceTest {
         given(apiClient.findSchedules(275))
                 .willReturn(Map.of("07:40", List.of(item25)));
 
+        given(orderService.findPaidOrderDates(eq(275), anyInt(), any())).willReturn(Set.of());
         given(orderService.tryCreateOrder(item25)).willReturn(true);
         given(orderService.getLastCreatedOrderId()).willReturn(572468);
 
@@ -172,6 +175,7 @@ class TicketMonitorServiceTest {
         given(apiClient.findSchedules(275))
                 .willReturn(Map.of("07:40", List.of(item25)));
 
+        given(orderService.findPaidOrderDates(eq(275), anyInt(), any())).willReturn(Set.of());
         given(orderService.tryCreateOrder(item25)).willReturn(false);
 
         List<LocalDate> targetDates = List.of(LocalDate.of(2026, 3, 25));
@@ -189,12 +193,38 @@ class TicketMonitorServiceTest {
         given(properties.getRouteId()).willReturn(275);
 
         ScheduleItem item25 = createSchedule(61429, "2026/3/25", 1);
-        ScheduleItem item26 = createSchedule(61430, "2026/3/26", 1);
+        given(apiClient.findSchedules(275))
+                .willReturn(Map.of("07:40", List.of(item25)));
+
+        given(orderService.findPaidOrderDates(eq(275), anyInt(), any()))
+                .willThrow(new UnpaidOrderException("你有待支付的订单"));
+
+        List<LocalDate> targetDates = List.of(LocalDate.of(2026, 3, 25));
+
+        // when
+        monitorService.executeMonitorCycle(targetDates);
+
+        // then: no order attempts, monitor should stop
+        verify(orderService, never()).tryCreateOrder(any());
+        verify(ticketLogService).writeUnpaidOrderWarning("你有待支付的订单");
+    }
+
+    // === paid order pre-check ===
+
+    @Test
+    void should_exclude_dates_with_paid_orders_from_monitoring() {
+        // given: 03-25 has paid order, 03-26 does not
+        given(properties.getRouteId()).willReturn(275);
+
+        ScheduleItem item25 = createSchedule(61430, "2026/3/25", 1);
+        ScheduleItem item26 = createSchedule(61431, "2026/3/26", 1);
         given(apiClient.findSchedules(275))
                 .willReturn(Map.of("07:40", List.of(item25, item26)));
 
-        given(orderService.tryCreateOrder(item25))
-                .willThrow(new UnpaidOrderException("你有待支付的订单"));
+        given(orderService.findPaidOrderDates(eq(275), anyInt(), any()))
+                .willReturn(Set.of(LocalDate.of(2026, 3, 25)));
+
+        given(orderService.tryCreateOrder(any())).willReturn(true);
 
         List<LocalDate> targetDates = List.of(
                 LocalDate.of(2026, 3, 25),
@@ -204,8 +234,53 @@ class TicketMonitorServiceTest {
         // when
         monitorService.executeMonitorCycle(targetDates);
 
-        // then: item26 should NOT be processed, monitor should stop
-        verify(orderService, never()).tryCreateOrder(item26);
+        // then: only 03-26 should be processed, 03-25 excluded
+        verify(orderService, never()).tryCreateOrder(item25);
+        verify(orderService).tryCreateOrder(item26);
+    }
+
+    @Test
+    void should_skip_monitoring_entirely_when_all_dates_have_paid_orders() {
+        // given
+        given(properties.getRouteId()).willReturn(275);
+
+        ScheduleItem item25 = createSchedule(61430, "2026/3/25", 1);
+        given(apiClient.findSchedules(275))
+                .willReturn(Map.of("07:40", List.of(item25)));
+
+        given(orderService.findPaidOrderDates(eq(275), anyInt(), any()))
+                .willReturn(Set.of(LocalDate.of(2026, 3, 25)));
+
+        List<LocalDate> targetDates = List.of(LocalDate.of(2026, 3, 25));
+
+        // when
+        monitorService.executeMonitorCycle(targetDates);
+
+        // then: no order attempts
+        verify(orderService, never()).tryCreateOrder(any());
+    }
+
+    @Test
+    void should_proceed_normally_when_no_paid_orders() {
+        // given
+        given(properties.getRouteId()).willReturn(275);
+
+        ScheduleItem item25 = createSchedule(61430, "2026/3/25", 1);
+        given(apiClient.findSchedules(275))
+                .willReturn(Map.of("07:40", List.of(item25)));
+
+        given(orderService.findPaidOrderDates(eq(275), anyInt(), any()))
+                .willReturn(Set.of());
+
+        given(orderService.tryCreateOrder(any())).willReturn(true);
+
+        List<LocalDate> targetDates = List.of(LocalDate.of(2026, 3, 25));
+
+        // when
+        monitorService.executeMonitorCycle(targetDates);
+
+        // then
+        verify(orderService).tryCreateOrder(item25);
     }
 
     // === startMonitor / stopMonitor (3.4.3) ===

@@ -15,6 +15,8 @@ import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @Component
 public class OrderService {
@@ -52,11 +54,6 @@ public class OrderService {
         }
         log.debug("开始下单流程: scheduleId={}, 出发时间={}", scheduleId, departureTime);
 
-        if (hasExistingOrder(properties.getRouteId(), scheduleId, date)) {
-            log.info("日期 {} 已有订单，跳过", date);
-            return false;
-        }
-
         List<CouponItem> coupons = findUsableCoupons(
                 properties.getRouteId(), scheduleId, properties.getBoardingPointId());
         log.debug("日期 {} 可用优惠券: {}张", date, coupons.size());
@@ -75,27 +72,28 @@ public class OrderService {
         return lastCreatedOrderId;
     }
 
-    boolean hasExistingOrder(int routeId, int scheduleId, LocalDate date) {
+    Set<LocalDate> findPaidOrderDates(int routeId, int scheduleId, Set<LocalDate> targetDates) {
         RouteStopsResponse stopsResponse = apiClient.getRouteStops(routeId, List.of(scheduleId));
         String routeName = stopsResponse.getRouteName();
-        log.debug("检查已购票: routeName={}, 日期={}", routeName, date);
+        log.debug("检查订单: routeName={}, 目标日期={}", routeName, targetDates);
 
         List<OrderItem> unpaidOrders = apiClient.getOrders("待支付", DEFAULT_ORDER_PAGE, DEFAULT_ORDER_PAGE_SIZE);
         log.debug("待支付订单: {}条", unpaidOrders.size());
         if (!unpaidOrders.isEmpty()) {
-            String unpaidInfo = formatUnpaidOrderInfo(unpaidOrders);
-            throw new UnpaidOrderException(unpaidInfo);
+            throw new UnpaidOrderException(formatUnpaidOrderInfo(unpaidOrders));
         }
 
         List<OrderItem> paidOrders = apiClient.getOrders("已支付", DEFAULT_ORDER_PAGE, DEFAULT_ORDER_PAGE_SIZE);
         log.debug("已支付订单: {}条", paidOrders.size());
-        if (paidOrders.stream().anyMatch(order -> matchesOrder(order, routeName, date))) {
-            log.debug("发现已支付的匹配订单，跳过日期 {}", date);
-            return true;
-        }
 
-        log.debug("日期 {} 无已有订单，可以下单", date);
-        return false;
+        Set<LocalDate> paidDates = targetDates.stream()
+                .filter(date -> paidOrders.stream().anyMatch(order -> matchesOrder(order, routeName, date)))
+                .collect(Collectors.toSet());
+
+        if (!paidDates.isEmpty()) {
+            log.debug("以下日期已有已支付订单: {}", paidDates);
+        }
+        return paidDates;
     }
 
     List<CouponItem> findUsableCoupons(int routeId, int scheduleId, int boardingPointId) {

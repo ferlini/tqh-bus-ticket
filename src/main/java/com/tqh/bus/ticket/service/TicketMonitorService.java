@@ -13,6 +13,7 @@ import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -94,7 +95,37 @@ public class TicketMonitorService {
     void executeMonitorCycle(List<LocalDate> targetDates) {
         try {
             log.info("开始监控，目标日期: {}", targetDates);
-            List<ScheduleItem> availableSchedules = findAvailableSchedules(targetDates);
+
+            Map<String, List<ScheduleItem>> scheduleMap = apiClient.findSchedules(properties.getRouteId());
+            if (log.isDebugEnabled()) {
+                scheduleMap.values().stream().flatMap(List::stream).forEach(item ->
+                        log.debug("车次 {} | 日期={} | 余票={}", item.getId(), item.getDate(), item.getNumber()));
+            }
+
+            // 取任意一个 scheduleId 用于查询路线名称
+            Optional<ScheduleItem> anySchedule = scheduleMap.values().stream()
+                    .flatMap(List::stream)
+                    .findFirst();
+            if (anySchedule.isEmpty()) {
+                log.debug("无车次数据，本轮监控结束");
+                return;
+            }
+
+            // 检查已支付订单，排除已购票日期
+            Set<LocalDate> paidDates = orderService.findPaidOrderDates(
+                    properties.getRouteId(), anySchedule.get().getId(), Set.copyOf(targetDates));
+            List<LocalDate> remainingDates = targetDates.stream()
+                    .filter(date -> !paidDates.contains(date))
+                    .toList();
+            if (remainingDates.isEmpty()) {
+                log.debug("所有目标日期均已有已支付订单，本轮监控结束");
+                return;
+            }
+            if (!paidDates.isEmpty()) {
+                log.debug("排除已支付日期后，剩余监控日期: {}", remainingDates);
+            }
+
+            List<ScheduleItem> availableSchedules = filterAvailableSchedules(scheduleMap, remainingDates);
             log.debug("有票车次: {}个", availableSchedules.size());
 
             for (ScheduleItem schedule : availableSchedules) {
@@ -112,22 +143,14 @@ public class TicketMonitorService {
         }
     }
 
-    private List<ScheduleItem> findAvailableSchedules(List<LocalDate> targetDates) {
-        Map<String, List<ScheduleItem>> scheduleMap = apiClient.findSchedules(properties.getRouteId());
+    private List<ScheduleItem> filterAvailableSchedules(Map<String, List<ScheduleItem>> scheduleMap,
+                                                         List<LocalDate> targetDates) {
         Set<LocalDate> targetDateSet = Set.copyOf(targetDates);
-
-        List<ScheduleItem> available = scheduleMap.values().stream()
+        return scheduleMap.values().stream()
                 .flatMap(List::stream)
                 .filter(item -> item.getNumber() > 0)
                 .filter(item -> targetDateSet.contains(parseScheduleDate(item.getDate())))
                 .toList();
-
-        if (log.isDebugEnabled()) {
-            scheduleMap.values().stream().flatMap(List::stream).forEach(item ->
-                    log.debug("车次 {} | 日期={} | 余票={}", item.getId(), item.getDate(), item.getNumber()));
-        }
-
-        return available;
     }
 
     private void processSchedule(ScheduleItem schedule) {
