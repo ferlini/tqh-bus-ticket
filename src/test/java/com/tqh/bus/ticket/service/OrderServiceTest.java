@@ -17,6 +17,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -36,97 +37,7 @@ class OrderServiceTest {
     @InjectMocks
     private OrderService orderService;
 
-    // === hasExistingOrder (3.2.1) ===
-
-    @Test
-    void should_throw_and_log_when_unpaid_order_exists() {
-        // given
-        RouteStopsResponse stopsResponse = new RouteStopsResponse();
-        stopsResponse.setRouteName("17号线-明珠线-上班");
-        given(apiClient.getRouteStops(275, List.of(61429))).willReturn(stopsResponse);
-
-        OrderItem order = createOrder(572468, "17号线-明珠线-上班", "2026-03-25 07:40:00", "待支付");
-        given(apiClient.getOrders("待支付", 1, 10)).willReturn(List.of(order));
-
-        // when & then
-        assertThatThrownBy(() -> orderService.hasExistingOrder(275, 61429, LocalDate.of(2026, 3, 25)))
-                .isInstanceOf(UnpaidOrderException.class)
-                .hasMessageContaining("待支付");
-
-        verify(apiClient, never()).getOrders(eq("已支付"), anyInt(), anyInt());
-    }
-
-    @Test
-    void should_return_true_when_paid_order_exists() {
-        // given
-        RouteStopsResponse stopsResponse = new RouteStopsResponse();
-        stopsResponse.setRouteName("17号线-明珠线-上班");
-        given(apiClient.getRouteStops(275, List.of(61429))).willReturn(stopsResponse);
-
-        given(apiClient.getOrders("待支付", 1, 10)).willReturn(List.of());
-
-        OrderItem order = createOrder(572468, "17号线-明珠线-上班", "2026-03-25 07:40:00", "支付成功");
-        given(apiClient.getOrders("已支付", 1, 10)).willReturn(List.of(order));
-
-        // when
-        boolean result = orderService.hasExistingOrder(275, 61429, LocalDate.of(2026, 3, 25));
-
-        // then
-        assertThat(result).isTrue();
-    }
-
-    @Test
-    void should_return_false_when_no_matching_order() {
-        // given
-        RouteStopsResponse stopsResponse = new RouteStopsResponse();
-        stopsResponse.setRouteName("17号线-明珠线-上班");
-        given(apiClient.getRouteStops(275, List.of(61429))).willReturn(stopsResponse);
-
-        OrderItem order = createOrder(572468, "4号线-上冲/香洲-下班", "2026-03-25 18:25:00", "支付成功");
-        given(apiClient.getOrders("待支付", 1, 10)).willReturn(List.of());
-        given(apiClient.getOrders("已支付", 1, 10)).willReturn(List.of(order));
-
-        // when
-        boolean result = orderService.hasExistingOrder(275, 61429, LocalDate.of(2026, 3, 25));
-
-        // then
-        assertThat(result).isFalse();
-    }
-
-    @Test
-    void should_check_unpaid_orders_before_paid_orders() {
-        // given
-        RouteStopsResponse stopsResponse = new RouteStopsResponse();
-        stopsResponse.setRouteName("17号线-明珠线-上班");
-        given(apiClient.getRouteStops(275, List.of(61429))).willReturn(stopsResponse);
-
-        given(apiClient.getOrders("待支付", 1, 10)).willReturn(List.of());
-        given(apiClient.getOrders("已支付", 1, 10)).willReturn(List.of());
-
-        // when
-        orderService.hasExistingOrder(275, 61429, LocalDate.of(2026, 3, 25));
-
-        // then
-        var inOrder = inOrder(apiClient);
-        inOrder.verify(apiClient).getOrders("待支付", 1, 10);
-        inOrder.verify(apiClient).getOrders("已支付", 1, 10);
-    }
-
-    @Test
-    void should_get_route_name_from_route_stops_api() {
-        // given
-        RouteStopsResponse stopsResponse = new RouteStopsResponse();
-        stopsResponse.setRouteName("17号线-明珠线-上班");
-        given(apiClient.getRouteStops(275, List.of(61429))).willReturn(stopsResponse);
-        given(apiClient.getOrders("待支付", 1, 10)).willReturn(List.of());
-        given(apiClient.getOrders("已支付", 1, 10)).willReturn(List.of());
-
-        // when
-        orderService.hasExistingOrder(275, 61429, LocalDate.of(2026, 3, 25));
-
-        // then
-        verify(apiClient).getRouteStops(275, List.of(61429));
-    }
+    // === findPaidOrderDates ===
 
     // === findUsableCoupons (3.2.3) ===
 
@@ -277,12 +188,6 @@ class OrderServiceTest {
         given(properties.getBoardingPointId()).willReturn(24);
         given(properties.getAlightingPointId()).willReturn(400);
 
-        RouteStopsResponse stopsResponse = new RouteStopsResponse();
-        stopsResponse.setRouteName("17号线-明珠线-上班");
-        given(apiClient.getRouteStops(275, List.of(61429))).willReturn(stopsResponse);
-        given(apiClient.getOrders("待支付", 1, 10)).willReturn(List.of());
-        given(apiClient.getOrders("已支付", 1, 10)).willReturn(List.of());
-
         CouponItem coupon = createCoupon(8317178, 2, Map.of("61429", true), Map.of("61429", "待使用"));
         given(apiClient.getCoupons(275, List.of(61429), 24)).willReturn(List.of(coupon));
         given(apiClient.verifyPrice(any())).willReturn(new PriceVerificationResponse());
@@ -309,12 +214,6 @@ class OrderServiceTest {
         given(properties.getBoardingPointId()).willReturn(24);
         given(properties.getAlightingPointId()).willReturn(400);
 
-        RouteStopsResponse stopsResponse = new RouteStopsResponse();
-        stopsResponse.setRouteName("17号线-明珠线-上班");
-        given(apiClient.getRouteStops(275, List.of(61429))).willReturn(stopsResponse);
-        given(apiClient.getOrders("待支付", 1, 10)).willReturn(List.of());
-        given(apiClient.getOrders("已支付", 1, 10)).willReturn(List.of());
-
         CouponItem coupon = createCoupon(8317178, 2, Map.of("61429", true), Map.of("61429", "待使用"));
         given(apiClient.getCoupons(275, List.of(61429), 24)).willReturn(List.of(coupon));
         given(apiClient.verifyPrice(any())).willReturn(new PriceVerificationResponse());
@@ -331,29 +230,6 @@ class OrderServiceTest {
     }
 
     @Test
-    void should_return_false_when_existing_order() {
-        // given
-        ScheduleItem schedule = createSchedule(61429, "2026/3/25", "07:40", 1);
-        LocalDateTime beforeDeparture = LocalDateTime.of(2026, 3, 25, 7, 0);
-        given(properties.getRouteId()).willReturn(275);
-
-        RouteStopsResponse stopsResponse = new RouteStopsResponse();
-        stopsResponse.setRouteName("17号线-明珠线-上班");
-        given(apiClient.getRouteStops(275, List.of(61429))).willReturn(stopsResponse);
-
-        OrderItem existingOrder = createOrder(572468, "17号线-明珠线-上班", "2026-03-25 07:40:00", "支付成功");
-        given(apiClient.getOrders("待支付", 1, 10)).willReturn(List.of());
-        given(apiClient.getOrders("已支付", 1, 10)).willReturn(List.of(existingOrder));
-
-        // when
-        boolean result = orderService.tryCreateOrder(schedule, beforeDeparture);
-
-        // then
-        assertThat(result).isFalse();
-        verify(apiClient, never()).createOrder(any());
-    }
-
-    @Test
     void should_return_true_when_all_coupons_fail_and_order_without_coupon() {
         // given
         ScheduleItem schedule = createSchedule(61429, "2026/3/25", "07:40", 1);
@@ -361,12 +237,6 @@ class OrderServiceTest {
         given(properties.getRouteId()).willReturn(275);
         given(properties.getBoardingPointId()).willReturn(24);
         given(properties.getAlightingPointId()).willReturn(400);
-
-        RouteStopsResponse stopsResponse = new RouteStopsResponse();
-        stopsResponse.setRouteName("17号线-明珠线-上班");
-        given(apiClient.getRouteStops(275, List.of(61429))).willReturn(stopsResponse);
-        given(apiClient.getOrders("待支付", 1, 10)).willReturn(List.of());
-        given(apiClient.getOrders("已支付", 1, 10)).willReturn(List.of());
 
         CouponItem coupon = createCoupon(100, 2, Map.of("61429", true), Map.of("61429", "待使用"));
         given(apiClient.getCoupons(275, List.of(61429), 24)).willReturn(List.of(coupon));
@@ -381,6 +251,112 @@ class OrderServiceTest {
 
         // then
         assertThat(result).isTrue();
+    }
+
+    // === findPaidOrderDates ===
+
+    @Test
+    void should_return_paid_dates_matching_route_and_target_dates() {
+        // given
+        RouteStopsResponse stopsResponse = new RouteStopsResponse();
+        stopsResponse.setRouteName("17号线-明珠线-上班");
+        given(apiClient.getRouteStops(275, List.of(61429))).willReturn(stopsResponse);
+
+        given(apiClient.getOrders("待支付", 1, 10)).willReturn(List.of());
+
+        OrderItem paidOrder = createOrder(572468, "17号线-明珠线-上班", "2026-03-25 07:40:00", "支付成功");
+        given(apiClient.getOrders("已支付", 1, 10)).willReturn(List.of(paidOrder));
+
+        Set<LocalDate> targetDates = Set.of(
+                LocalDate.of(2026, 3, 25),
+                LocalDate.of(2026, 3, 26));
+
+        // when
+        Set<LocalDate> result = orderService.findPaidOrderDates(275, 61429, targetDates);
+
+        // then
+        assertThat(result).containsExactly(LocalDate.of(2026, 3, 25));
+    }
+
+    @Test
+    void should_return_empty_when_paid_orders_do_not_match_route() {
+        // given
+        RouteStopsResponse stopsResponse = new RouteStopsResponse();
+        stopsResponse.setRouteName("17号线-明珠线-上班");
+        given(apiClient.getRouteStops(275, List.of(61429))).willReturn(stopsResponse);
+
+        given(apiClient.getOrders("待支付", 1, 10)).willReturn(List.of());
+
+        OrderItem paidOrder = createOrder(572468, "4号线-上冲/香洲-下班", "2026-03-25 18:25:00", "支付成功");
+        given(apiClient.getOrders("已支付", 1, 10)).willReturn(List.of(paidOrder));
+
+        Set<LocalDate> targetDates = Set.of(LocalDate.of(2026, 3, 25));
+
+        // when
+        Set<LocalDate> result = orderService.findPaidOrderDates(275, 61429, targetDates);
+
+        // then
+        assertThat(result).isEmpty();
+    }
+
+    @Test
+    void should_return_empty_when_no_paid_orders() {
+        // given
+        RouteStopsResponse stopsResponse = new RouteStopsResponse();
+        stopsResponse.setRouteName("17号线-明珠线-上班");
+        given(apiClient.getRouteStops(275, List.of(61429))).willReturn(stopsResponse);
+
+        given(apiClient.getOrders("待支付", 1, 10)).willReturn(List.of());
+        given(apiClient.getOrders("已支付", 1, 10)).willReturn(List.of());
+
+        Set<LocalDate> targetDates = Set.of(LocalDate.of(2026, 3, 25));
+
+        // when
+        Set<LocalDate> result = orderService.findPaidOrderDates(275, 61429, targetDates);
+
+        // then
+        assertThat(result).isEmpty();
+    }
+
+    @Test
+    void should_throw_when_unpaid_order_exists() {
+        // given
+        RouteStopsResponse stopsResponse = new RouteStopsResponse();
+        stopsResponse.setRouteName("17号线-明珠线-上班");
+        given(apiClient.getRouteStops(275, List.of(61429))).willReturn(stopsResponse);
+
+        OrderItem unpaidOrder = createOrder(572468, "17号线-明珠线-上班", "2026-03-25 07:40:00", "待支付");
+        given(apiClient.getOrders("待支付", 1, 10)).willReturn(List.of(unpaidOrder));
+
+        Set<LocalDate> targetDates = Set.of(LocalDate.of(2026, 3, 25));
+
+        // when & then
+        assertThatThrownBy(() -> orderService.findPaidOrderDates(275, 61429, targetDates))
+                .isInstanceOf(UnpaidOrderException.class)
+                .hasMessageContaining("待支付");
+
+        verify(apiClient, never()).getOrders(eq("已支付"), anyInt(), anyInt());
+    }
+
+    @Test
+    void should_check_unpaid_before_paid_in_find_paid_order_dates() {
+        // given
+        RouteStopsResponse stopsResponse = new RouteStopsResponse();
+        stopsResponse.setRouteName("17号线-明珠线-上班");
+        given(apiClient.getRouteStops(275, List.of(61429))).willReturn(stopsResponse);
+
+        given(apiClient.getOrders("待支付", 1, 10)).willReturn(List.of());
+        given(apiClient.getOrders("已支付", 1, 10)).willReturn(List.of());
+
+        Set<LocalDate> targetDates = Set.of(LocalDate.of(2026, 3, 25));
+
+        // when
+        orderService.findPaidOrderDates(275, 61429, targetDates);
+
+        // then
+        var inOrder = inOrder(apiClient);
+        inOrder.verify(apiClient).getOrders("待支付", 1, 10);
+        inOrder.verify(apiClient).getOrders("已支付", 1, 10);
     }
 
     // === helpers ===
