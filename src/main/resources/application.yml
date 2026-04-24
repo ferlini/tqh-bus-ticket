@@ -19,3 +19,9 @@ tqh:
   alighting-point-id: 400
   monitor-interval: 30
   log-file-path: ./logs/ticket.log
+
+openclaw:
+  webhook:
+    url: http://127.0.0.1:18789/hooks/wake
+    token: "请手动配置"
+    channel: "请手动配置"

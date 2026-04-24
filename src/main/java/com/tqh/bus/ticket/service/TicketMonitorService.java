@@ -2,6 +2,7 @@ package com.tqh.bus.ticket.service;
 
 import com.tqh.bus.ticket.common.UnpaidOrderException;
 import com.tqh.bus.ticket.config.TqhProperties;
+import com.tqh.bus.ticket.integration.OpenClawWebhookClient;
 import com.tqh.bus.ticket.integration.TqhApiClient;
 import com.tqh.bus.ticket.integration.model.ScheduleItem;
 import org.slf4j.Logger;
@@ -13,7 +14,6 @@ import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -32,6 +32,7 @@ public class TicketMonitorService {
     private final OrderService orderService;
     private final TicketLogService ticketLogService;
     private final TqhProperties properties;
+    private final OpenClawWebhookClient openClawWebhookClient;
 
     private final ScheduledExecutorService scheduler;
     private ScheduledFuture<?> currentTask;
@@ -39,11 +40,13 @@ public class TicketMonitorService {
     public TicketMonitorService(TqhApiClient apiClient,
                                 OrderService orderService,
                                 TicketLogService ticketLogService,
-                                TqhProperties properties) {
+                                TqhProperties properties,
+                                OpenClawWebhookClient openClawWebhookClient) {
         this.apiClient = apiClient;
         this.orderService = orderService;
         this.ticketLogService = ticketLogService;
         this.properties = properties;
+        this.openClawWebhookClient = openClawWebhookClient;
         this.scheduler = createScheduler();
     }
 
@@ -102,31 +105,23 @@ public class TicketMonitorService {
                         log.debug("车次 {} | 日期={} | 余票={}", item.getId(), item.getDate(), item.getNumber()));
             }
 
-            // 取任意一个 scheduleId 用于查询路线名称
-            Optional<ScheduleItem> anySchedule = scheduleMap.values().stream()
-                    .flatMap(List::stream)
-                    .findFirst();
-            if (anySchedule.isEmpty()) {
-                log.debug("无车次数据，本轮监控结束");
-                return;
-            }
-
-            // 检查已支付订单，排除已购票日期
-            Set<LocalDate> paidDates = orderService.findPaidOrderDates(
-                    properties.getRouteId(), anySchedule.get().getId(), Set.copyOf(targetDates));
-            List<LocalDate> remainingDates = targetDates.stream()
-                    .filter(date -> !paidDates.contains(date))
-                    .toList();
-            if (remainingDates.isEmpty()) {
-                log.debug("所有目标日期均已有已支付订单，本轮监控结束");
-                return;
-            }
-            if (!paidDates.isEmpty()) {
-                log.debug("排除已支付日期后，剩余监控日期: {}", remainingDates);
-            }
-
-            List<ScheduleItem> availableSchedules = filterAvailableSchedules(scheduleMap, remainingDates);
+            // 先筛选有票车次，无票则跳过已支付订单检查
+            List<ScheduleItem> availableSchedules = filterAvailableSchedules(scheduleMap, targetDates);
             log.debug("有票车次: {}个", availableSchedules.size());
+            if (availableSchedules.isEmpty()) {
+                log.debug("无有票车次，本轮监控结束");
+                return;
+            }
+
+            // 检查已支付订单，排除已购票日期的车次
+            Set<LocalDate> paidDates = orderService.findPaidOrderDates(
+                    properties.getRouteId(), availableSchedules.get(0).getId(), Set.copyOf(targetDates));
+            if (!paidDates.isEmpty()) {
+                availableSchedules = availableSchedules.stream()
+                        .filter(item -> !paidDates.contains(parseScheduleDate(item.getDate())))
+                        .toList();
+                log.debug("排除已支付日期后，剩余有票车次: {}个", availableSchedules.size());
+            }
 
             for (ScheduleItem schedule : availableSchedules) {
                 processSchedule(schedule);
@@ -158,7 +153,8 @@ public class TicketMonitorService {
             log.debug("开始处理车次: id={}, 日期={}, 余票={}", schedule.getId(), schedule.getDate(), schedule.getNumber());
             boolean created = orderService.tryCreateOrder(schedule);
             if (created) {
-                ticketLogService.logTicketPurchase(orderService.getLastCreatedOrderId());
+                String purchaseMessage = ticketLogService.logTicketPurchase(orderService.getLastCreatedOrderId());
+                openClawWebhookClient.notifyTicketPurchase(purchaseMessage);
             }
         } catch (UnpaidOrderException e) {
             // 待支付订单异常必须向上抛出，终止监控循环

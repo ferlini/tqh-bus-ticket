@@ -35,7 +35,7 @@ public class TicketLogService {
         this.logFilePath = Path.of(properties.getLogFilePath());
     }
 
-    public void logTicketPurchase(int wxOrderId) {
+    public String logTicketPurchase(int wxOrderId) {
         List<OrderItem> orders = apiClient.getOrders("", DEFAULT_ORDER_PAGE, DEFAULT_ORDER_PAGE_SIZE);
         OrderItem targetOrder = orders.stream()
                 .filter(order -> order.getId() == wxOrderId)
@@ -44,6 +44,7 @@ public class TicketLogService {
 
         String entry = formatLogEntry(targetOrder);
         writeToFile(entry);
+        return entry;
     }
 
     public void writeUnpaidOrderWarning(String message) {
