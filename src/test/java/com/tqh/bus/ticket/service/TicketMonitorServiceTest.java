@@ -3,6 +3,7 @@ package com.tqh.bus.ticket.service;
 import com.tqh.bus.ticket.common.BusinessException;
 import com.tqh.bus.ticket.common.UnpaidOrderException;
 import com.tqh.bus.ticket.config.TqhProperties;
+import com.tqh.bus.ticket.integration.OpenClawWebhookClient;
 import com.tqh.bus.ticket.integration.TqhApiClient;
 import com.tqh.bus.ticket.integration.model.CreateOrderResponse;
 import com.tqh.bus.ticket.integration.model.ScheduleItem;
@@ -35,6 +36,9 @@ class TicketMonitorServiceTest {
 
     @Mock
     private TqhProperties properties;
+
+    @Mock
+    private OpenClawWebhookClient openClawWebhookClient;
 
     @InjectMocks
     private TicketMonitorService monitorService;
@@ -167,6 +171,52 @@ class TicketMonitorServiceTest {
     }
 
     @Test
+    void should_send_webhook_with_purchase_message_after_successful_order() {
+        // given
+        given(properties.getRouteId()).willReturn(275);
+
+        ScheduleItem item25 = createSchedule(61429, "2026/3/25", 1);
+        given(apiClient.findSchedules(275))
+                .willReturn(Map.of("07:40", List.of(item25)));
+
+        given(orderService.findPaidOrderDates(eq(275), anyInt(), any())).willReturn(Set.of());
+        given(orderService.tryCreateOrder(item25)).willReturn(true);
+        given(orderService.getLastCreatedOrderId()).willReturn(572468);
+        given(ticketLogService.logTicketPurchase(572468))
+                .willReturn("----------------------------------------\n日期: 2026/3/25\n");
+
+        List<LocalDate> targetDates = List.of(LocalDate.of(2026, 3, 25));
+
+        // when
+        monitorService.executeMonitorCycle(targetDates);
+
+        // then
+        verify(openClawWebhookClient).notifyTicketPurchase(
+                "----------------------------------------\n日期: 2026/3/25\n");
+    }
+
+    @Test
+    void should_not_send_webhook_when_order_skipped() {
+        // given
+        given(properties.getRouteId()).willReturn(275);
+
+        ScheduleItem item25 = createSchedule(61429, "2026/3/25", 1);
+        given(apiClient.findSchedules(275))
+                .willReturn(Map.of("07:40", List.of(item25)));
+
+        given(orderService.findPaidOrderDates(eq(275), anyInt(), any())).willReturn(Set.of());
+        given(orderService.tryCreateOrder(item25)).willReturn(false);
+
+        List<LocalDate> targetDates = List.of(LocalDate.of(2026, 3, 25));
+
+        // when
+        monitorService.executeMonitorCycle(targetDates);
+
+        // then
+        verify(openClawWebhookClient, never()).notifyTicketPurchase(any());
+    }
+
+    @Test
     void should_not_log_ticket_when_order_skipped() {
         // given
         given(properties.getRouteId()).willReturn(275);
@@ -207,6 +257,25 @@ class TicketMonitorServiceTest {
         // then: no order attempts, monitor should stop
         verify(orderService, never()).tryCreateOrder(any());
         verify(ticketLogService).writeUnpaidOrderWarning("你有待支付的订单");
+    }
+
+    @Test
+    void should_skip_paid_order_check_when_no_available_schedules() {
+        // given
+        given(properties.getRouteId()).willReturn(275);
+
+        ScheduleItem noTickets = createSchedule(61430, "2026/3/25", 0);
+        given(apiClient.findSchedules(275))
+                .willReturn(Map.of("07:40", List.of(noTickets)));
+
+        List<LocalDate> targetDates = List.of(LocalDate.of(2026, 3, 25));
+
+        // when
+        monitorService.executeMonitorCycle(targetDates);
+
+        // then: no paid order check, no order attempts
+        verify(orderService, never()).findPaidOrderDates(anyInt(), anyInt(), any());
+        verify(orderService, never()).tryCreateOrder(any());
     }
 
     // === paid order pre-check ===
