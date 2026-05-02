@@ -20,3 +20,6 @@ src/main/resources/application-prod.yml
 
 # Deploy script (contains server credentials)
 deploy.sh
+
+# Local env file (cron-watch-next-week.sh secrets — see .env.example)
+.env

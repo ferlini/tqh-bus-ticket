@@ -6,6 +6,7 @@ import com.tqh.bus.ticket.config.TqhProperties;
 import com.tqh.bus.ticket.integration.OpenClawWebhookClient;
 import com.tqh.bus.ticket.integration.TqhApiClient;
 import com.tqh.bus.ticket.integration.model.CreateOrderResponse;
+import com.tqh.bus.ticket.integration.model.RouteStopsResponse;
 import com.tqh.bus.ticket.integration.model.ScheduleItem;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -18,6 +19,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.*;
@@ -364,6 +366,104 @@ class TicketMonitorServiceTest {
 
         // when & then: should not throw
         monitorService.executeMonitorCycle(targetDates);
+    }
+
+    // === executeWatchCycle (watch-only mode) ===
+
+    @Test
+    void should_send_availability_webhook_when_tickets_found_in_watch_cycle() {
+        // given
+        given(properties.getRouteId()).willReturn(275);
+        ScheduleItem item25 = createSchedule(61429, "2026/3/25", 10);
+        given(apiClient.findSchedules(275))
+                .willReturn(Map.of("07:40", List.of(item25)));
+        given(apiClient.getRouteStops(eq(275), any())).willReturn(routeStops("线路A"));
+        given(openClawWebhookClient.notifyTicketAvailable(anyString())).willReturn(true);
+
+        // when
+        boolean shouldStop = monitorService.executeWatchCycle(List.of(LocalDate.of(2026, 3, 25)));
+
+        // then
+        assertThat(shouldStop).isTrue();
+        verify(openClawWebhookClient).notifyTicketAvailable(
+                "线路A\n  - 2026-03-25: 剩余10张");
+        verify(orderService, never()).tryCreateOrder(any());
+    }
+
+    @Test
+    void should_merge_multiple_dates_into_single_availability_message() {
+        // given
+        given(properties.getRouteId()).willReturn(275);
+        ScheduleItem item02 = createSchedule(61429, "2026/5/2", 10);
+        ScheduleItem item03 = createSchedule(61430, "2026/5/3", 5);
+        ScheduleItem item04 = createSchedule(61431, "2026/5/4", 3);
+        given(apiClient.findSchedules(275))
+                .willReturn(Map.of("07:40", List.of(item04, item02, item03)));
+        given(apiClient.getRouteStops(eq(275), any())).willReturn(routeStops("线路A"));
+        given(openClawWebhookClient.notifyTicketAvailable(anyString())).willReturn(true);
+
+        // when
+        monitorService.executeWatchCycle(List.of(
+                LocalDate.of(2026, 5, 2),
+                LocalDate.of(2026, 5, 3),
+                LocalDate.of(2026, 5, 4)));
+
+        // then: dates merged in ascending order, single notify call
+        verify(openClawWebhookClient).notifyTicketAvailable(
+                "线路A\n  - 2026-05-02: 剩余10张\n  - 2026-05-03: 剩余5张\n  - 2026-05-04: 剩余3张");
+    }
+
+    @Test
+    void should_return_false_and_skip_webhook_when_no_tickets_in_watch_cycle() {
+        // given
+        given(properties.getRouteId()).willReturn(275);
+        ScheduleItem noTickets = createSchedule(61430, "2026/3/25", 0);
+        given(apiClient.findSchedules(275))
+                .willReturn(Map.of("07:40", List.of(noTickets)));
+
+        // when
+        boolean shouldStop = monitorService.executeWatchCycle(List.of(LocalDate.of(2026, 3, 25)));
+
+        // then
+        assertThat(shouldStop).isFalse();
+        verify(apiClient, never()).getRouteStops(anyInt(), any());
+        verify(openClawWebhookClient, never()).notifyTicketAvailable(anyString());
+    }
+
+    @Test
+    void should_return_false_when_availability_webhook_fails() {
+        // given
+        given(properties.getRouteId()).willReturn(275);
+        ScheduleItem item25 = createSchedule(61429, "2026/3/25", 10);
+        given(apiClient.findSchedules(275))
+                .willReturn(Map.of("07:40", List.of(item25)));
+        given(apiClient.getRouteStops(eq(275), any())).willReturn(routeStops("线路A"));
+        given(openClawWebhookClient.notifyTicketAvailable(anyString())).willReturn(false);
+
+        // when
+        boolean shouldStop = monitorService.executeWatchCycle(List.of(LocalDate.of(2026, 3, 25)));
+
+        // then: failure means scheduler keeps retrying next cycle
+        assertThat(shouldStop).isFalse();
+    }
+
+    @Test
+    void should_return_false_when_watch_cycle_throws_exception() {
+        // given
+        given(properties.getRouteId()).willReturn(275);
+        given(apiClient.findSchedules(275)).willThrow(new BusinessException("网络超时"));
+
+        // when
+        boolean shouldStop = monitorService.executeWatchCycle(List.of(LocalDate.of(2026, 3, 25)));
+
+        // then: error must not propagate (would kill the scheduler)
+        assertThat(shouldStop).isFalse();
+    }
+
+    private RouteStopsResponse routeStops(String routeName) {
+        RouteStopsResponse stops = new RouteStopsResponse();
+        stops.setRouteName(routeName);
+        return stops;
     }
 
     private ScheduleItem createSchedule(int id, String date, int number) {
