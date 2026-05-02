@@ -34,3 +34,16 @@ echo $! > "$PID_FILE"
 echo "$APP_NAME 已启动 (PID: $!)"
 echo "日志文件: $LOG_FILE"
 echo "查看日志: tail -f $LOG_FILE"
+
+# 安装 cronjob：每周五 12:00 监控下周车票（watch 模式，发送通知后自动停止）。
+# 通过尾部标签识别本服务的条目，幂等：重复 start.sh 不会留下重复行。
+CRON_TAG="# tqh-bus-ticket: watch-next-week"
+CRON_SCRIPT="$HOME/tqh-bus-ticket/cron-watch-next-week.sh"
+CRON_LOG="$LOG_DIR/cron.log"
+if [ -x "$CRON_SCRIPT" ]; then
+    CRON_LINE="0 12 * * 5 $CRON_SCRIPT >> $CRON_LOG 2>&1 $CRON_TAG"
+    ( crontab -l 2>/dev/null | grep -vF "$CRON_TAG"; echo "$CRON_LINE" ) | crontab -
+    echo "已安装 cronjob（每周五 12:00 监控下周车票）"
+else
+    echo "警告: $CRON_SCRIPT 不存在或不可执行，跳过 cronjob 安装"
+fi

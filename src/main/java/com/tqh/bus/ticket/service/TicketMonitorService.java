@@ -4,6 +4,7 @@ import com.tqh.bus.ticket.common.UnpaidOrderException;
 import com.tqh.bus.ticket.config.TqhProperties;
 import com.tqh.bus.ticket.integration.OpenClawWebhookClient;
 import com.tqh.bus.ticket.integration.TqhApiClient;
+import com.tqh.bus.ticket.integration.model.RouteStopsResponse;
 import com.tqh.bus.ticket.integration.model.ScheduleItem;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -12,6 +13,7 @@ import org.springframework.stereotype.Component;
 import jakarta.annotation.PreDestroy;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -88,6 +90,21 @@ public class TicketMonitorService {
         );
     }
 
+    public void startWatch(List<LocalDate> targetDates) {
+        stopMonitor();
+        log.info("启动有票通知监控，目标日期: {}，间隔: {}秒", targetDates, properties.getMonitorInterval());
+        currentTask = scheduler.scheduleWithFixedDelay(
+                () -> {
+                    if (executeWatchCycle(targetDates)) {
+                        stopMonitor();
+                    }
+                },
+                0,
+                properties.getMonitorInterval(),
+                TimeUnit.SECONDS
+        );
+    }
+
     public void stopMonitor() {
         if (currentTask != null && !currentTask.isCancelled()) {
             currentTask.cancel(false);
@@ -101,7 +118,7 @@ public class TicketMonitorService {
 
             Map<String, List<ScheduleItem>> scheduleMap = apiClient.findSchedules(properties.getRouteId());
             if (log.isDebugEnabled()) {
-                scheduleMap.values().stream().flatMap(List::stream).forEach(item ->
+                scheduleMap.values().stream().flatMap(List::stream).sorted(Comparator.comparing(ScheduleItem::getDate)).forEach(item ->
                         log.debug("车次 {} | 日期={} | 余票={}", item.getId(), item.getDate(), item.getNumber()));
             }
 
@@ -122,7 +139,6 @@ public class TicketMonitorService {
                         .toList();
                 log.debug("排除已支付日期后，剩余有票车次: {}个", availableSchedules.size());
             }
-
             for (ScheduleItem schedule : availableSchedules) {
                 processSchedule(schedule);
             }
@@ -145,6 +161,7 @@ public class TicketMonitorService {
                 .flatMap(List::stream)
                 .filter(item -> item.getNumber() > 0)
                 .filter(item -> targetDateSet.contains(parseScheduleDate(item.getDate())))
+                .sorted(Comparator.comparing(ScheduleItem::getDate))
                 .toList();
     }
 
@@ -163,6 +180,44 @@ public class TicketMonitorService {
             // 单个日期失败不中断其他日期的处理，下一轮会重新尝试
             log.error("处理车次 {} 异常: {}", schedule.getDate(), e.getMessage(), e);
         }
+    }
+
+    boolean executeWatchCycle(List<LocalDate> targetDates) {
+        try {
+            log.info("开始监控有票通知，目标日期: {}", targetDates);
+
+            Map<String, List<ScheduleItem>> scheduleMap = apiClient.findSchedules(properties.getRouteId());
+            List<ScheduleItem> availableSchedules = filterAvailableSchedules(scheduleMap, targetDates);
+            if (availableSchedules.isEmpty()) {
+                log.debug("无有票车次，等待下一轮");
+                return false;
+            }
+
+            List<Integer> scheduleIds = availableSchedules.stream().map(ScheduleItem::getId).toList();
+            RouteStopsResponse routeStops = apiClient.getRouteStops(properties.getRouteId(), scheduleIds);
+            String message = buildAvailabilityMessage(routeStops.getRouteName(), availableSchedules);
+
+            boolean sent = openClawWebhookClient.notifyTicketAvailable(message);
+            if (sent) {
+                log.info("有票通知发送成功，停止监控");
+            } else {
+                log.warn("有票通知发送失败，下一轮将重试");
+            }
+            return sent;
+        } catch (Exception e) {
+            log.error("有票监控本轮异常: {}", e.getMessage(), e);
+            return false;
+        }
+    }
+
+    String buildAvailabilityMessage(String routeName, List<ScheduleItem> schedules) {
+        StringBuilder sb = new StringBuilder(routeName);
+        schedules.stream()
+                .sorted(Comparator.comparing(ScheduleItem::getDate))
+                .forEach(item -> sb.append("\n  - ")
+                        .append(parseScheduleDate(item.getDate()))
+                        .append(": 剩余").append(item.getNumber()).append("张"));
+        return sb.toString();
     }
 
     private LocalDate parseScheduleDate(String dateStr) {

@@ -134,4 +134,54 @@ class MonitorControllerTest {
                 .andExpect(jsonPath("$.data.monitorDates", hasSize(1)))
                 .andExpect(jsonPath("$.data.monitorDates[0]").value("2026-03-26"));
     }
+
+    @Test
+    void should_start_watch_for_this_week() throws Exception {
+        // given
+        given(tqhProperties.getMonitorInterval()).willReturn(30);
+        given(dateRangeCalculator.thisWeekDates(LocalDate.now()))
+                .willReturn(List.of(LocalDate.of(2026, 5, 2), LocalDate.of(2026, 5, 3)));
+
+        // when & then
+        mockMvc.perform(post("/monitor/watch/this-week"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data.monitorDates", hasSize(2)))
+                .andExpect(jsonPath("$.data.interval").value(30));
+
+        verify(monitorService).startWatch(anyList());
+    }
+
+    @Test
+    void should_start_watch_for_next_week() throws Exception {
+        // given
+        given(tqhProperties.getMonitorInterval()).willReturn(30);
+        given(dateRangeCalculator.nextWeekDates(LocalDate.now()))
+                .willReturn(List.of(LocalDate.of(2026, 5, 4), LocalDate.of(2026, 5, 5)));
+
+        // when & then
+        mockMvc.perform(post("/monitor/watch/next-week"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.monitorDates", hasSize(2)));
+
+        verify(monitorService).startWatch(anyList());
+    }
+
+    @Test
+    void should_start_watch_for_custom_dates() throws Exception {
+        // given
+        given(tqhProperties.getMonitorInterval()).willReturn(30);
+        given(dateRangeCalculator.filterPastDates(anyList(), org.mockito.ArgumentMatchers.any(LocalDate.class)))
+                .willAnswer(invocation -> invocation.getArgument(0));
+
+        // when & then
+        mockMvc.perform(post("/monitor/watch/dates")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"dates\": [\"2026-05-02\", \"2026-05-03\"]}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.monitorDates", hasSize(2)))
+                .andExpect(jsonPath("$.data.monitorDates[0]").value("2026-05-02"));
+
+        verify(monitorService).startWatch(anyList());
+    }
 }

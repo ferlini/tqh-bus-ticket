@@ -53,6 +53,28 @@ public class MonitorController {
         return ResultWrapper.success(buildData(dates));
     }
 
+    @PostMapping("/watch/this-week")
+    public ResultWrapper<Map<String, Object>> watchThisWeek() {
+        List<LocalDate> dates = dateRangeCalculator.thisWeekDates(LocalDate.now());
+        monitorService.startWatch(dates);
+        return ResultWrapper.success(buildData(dates));
+    }
+
+    @PostMapping("/watch/next-week")
+    public ResultWrapper<Map<String, Object>> watchNextWeek() {
+        List<LocalDate> dates = dateRangeCalculator.nextWeekDates(LocalDate.now());
+        monitorService.startWatch(dates);
+        return ResultWrapper.success(buildData(dates));
+    }
+
+    @PostMapping("/watch/dates")
+    public ResultWrapper<Map<String, Object>> watchDates(@RequestBody MonitorDatesRequest request) {
+        List<LocalDate> parsedDates = parseDates(request.getDates());
+        List<LocalDate> dates = dateRangeCalculator.filterPastDates(parsedDates, LocalDate.now());
+        monitorService.startWatch(dates);
+        return ResultWrapper.success(buildData(dates));
+    }
+
     private List<LocalDate> parseDates(List<String> dateStrings) {
         try {
             return dateStrings.stream()

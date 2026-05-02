@@ -34,20 +34,56 @@ java -jar target/tqh-bus-ticket-0.0.1-SNAPSHOT.jar
 
 ### 3. 启动监控
 
+系统提供两种工作模式，对应两组接口：
+
+| 模式 | 行为 | 端点前缀 |
+|------|------|---------|
+| **买票（monitor）** | 发现有票即自动创建订单（不自动支付），持续运行直到用户停止或出现待支付订单 | `/monitor/...` |
+| **监控（watch）** | 发现有票即聚合所有有票日期发送一条 OpenClaw Webhook 通知，**通知成功后自动停止本次监控** | `/monitor/watch/...` |
+
+#### 买票模式（自动下单）
+
 ```bash
-# 监控本周（今天至周日）
+# 买本周车票（今天至周日）
 curl -X POST http://localhost:8080/monitor/this-week
 
-# 监控下周（周一至周日）
+# 买下周车票（周一至周日）
 curl -X POST http://localhost:8080/monitor/next-week
 
-# 监控指定日期
+# 买指定日期车票
 curl -X POST http://localhost:8080/monitor/dates \
   -H "Content-Type: application/json" \
   -d '{"dates": ["2026-03-25", "2026-03-26"]}'
 ```
 
-响应示例：
+#### 监控模式（仅通知，不下单）
+
+发现任意目标日期有票后，会构造形如：
+
+```
+线路A
+  - 2026-05-02: 剩余10张
+  - 2026-05-03: 剩余5张
+```
+
+的内容并通过 OpenClaw Webhook 推送。当 Webhook 返回 `{"ok": true}` 视为发送成功，调度器随即停止；否则下一轮继续重试。
+
+```bash
+# 监控本周车票
+curl -X POST http://localhost:8080/monitor/watch/this-week
+
+# 监控下周车票
+curl -X POST http://localhost:8080/monitor/watch/next-week
+
+# 监控指定日期车票
+curl -X POST http://localhost:8080/monitor/watch/dates \
+  -H "Content-Type: application/json" \
+  -d '{"dates": ["2026-05-02", "2026-05-03"]}'
+```
+
+> 「买票」和「监控」共用同一个调度器，发起新任务会自动取消上一个任务，无需手动停止。
+
+响应示例（两种模式相同）：
 
 ```json
 {

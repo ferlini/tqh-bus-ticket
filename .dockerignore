@@ -1,0 +1,11 @@
+.git
+.gitignore
+.idea
+*.iml
+target
+doc
+.claude
+CLAUDE.md
+constitution.md
+README.md
+*.md
