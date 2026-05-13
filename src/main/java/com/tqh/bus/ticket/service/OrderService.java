@@ -1,5 +1,7 @@
 package com.tqh.bus.ticket.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.tqh.bus.ticket.common.BusinessException;
 import com.tqh.bus.ticket.common.UnpaidOrderException;
 import com.tqh.bus.ticket.config.TqhProperties;
 import com.tqh.bus.ticket.integration.TqhApiClient;
@@ -12,10 +14,12 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 @Component
@@ -23,6 +27,7 @@ public class OrderService {
 
     private static final Logger log = LoggerFactory.getLogger(OrderService.class);
     private static final DateTimeFormatter SCHEDULE_DATE_FORMAT = DateTimeFormatter.ofPattern("yyyy/M/d");
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     // API 查询配置常量
     private static final int DEFAULT_ORDER_PAGE = 1;
@@ -36,6 +41,83 @@ public class OrderService {
     public OrderService(TqhApiClient apiClient, TqhProperties properties) {
         this.apiClient = apiClient;
         this.properties = properties;
+    }
+
+    public boolean tryCreateMultiScheduleOrder(List<ScheduleItem> schedules) {
+        return tryCreateMultiScheduleOrder(schedules, LocalDateTime.now());
+    }
+
+    boolean tryCreateMultiScheduleOrder(List<ScheduleItem> schedules, LocalDateTime now) {
+        if (schedules == null || schedules.isEmpty()) {
+            throw new BusinessException("schedule_ids 不能为空");
+        }
+        List<ScheduleItem> deduped = dedupeById(schedules);
+        List<ScheduleItem> active = deduped.stream()
+                .filter(s -> now.isBefore(departureTimeOf(s)))
+                .toList();
+        if (active.isEmpty()) {
+            log.info("合并下单跳过：所有车次已发车或过滤后为空 (原始 {} 条)", schedules.size());
+            return false;
+        }
+        List<ScheduleItem> sortedByDeparture = active.stream()
+                .sorted(java.util.Comparator.comparing(OrderService::departureTimeOf))
+                .toList();
+        List<Integer> scheduleIds = idsOf(sortedByDeparture);
+        log.debug("开始合并下单: scheduleIds={}", scheduleIds);
+
+        List<CouponItem> allCoupons = findUsableCouponsForSchedules(
+                properties.getRouteId(), scheduleIds, properties.getBoardingPointId());
+        Map<Integer, CouponItem> assignment = allocateCoupons(sortedByDeparture, allCoupons);
+
+        // 合并下单前对整组 (schedule, coupon) 做一次批量价格验证——任何情况下都执行（包括无券订单），
+        // 保证服务端对车次可订状态做最后一次确认；任何失败由调用方处理。
+        verifyFinalAssignment(scheduleIds, assignment);
+
+        CreateOrderRequest createRequest = buildCreateOrderRequest(scheduleIds, assignment);
+        log.debug("createOrder 请求报文: {}", toJson(createRequest));
+        CreateOrderResponse response = apiClient.createOrder(createRequest);
+        log.debug("createOrder 响应报文: {}", toJson(response));
+        lastCreatedOrderId = response.getWxOrderId();
+        log.info("合并下单成功: scheduleIds={}, couponAssignment={}, wx_order_id={}",
+                scheduleIds, assignmentSummary(assignment), response.getWxOrderId());
+        return true;
+    }
+
+    List<CouponItem> findUsableCouponsForSchedules(int routeId, List<Integer> scheduleIds, int boardingPointId) {
+        return apiClient.getCoupons(routeId, scheduleIds, boardingPointId);
+    }
+
+    void verifyFinalAssignment(List<Integer> scheduleIds, Map<Integer, CouponItem> assignment) {
+        PriceVerificationRequest request = new PriceVerificationRequest();
+        request.setRouteId(properties.getRouteId());
+        request.setScheduleIds(scheduleIds);
+        request.setBoardingPointId(properties.getBoardingPointId());
+        request.setAlightingPointId(properties.getAlightingPointId());
+        request.setCouponIds(buildMultiCouponIds(assignment));
+        apiClient.verifyPrice(request);
+        log.debug("合并下单最终批量价格验证通过: scheduleIds={}, couponCount={}",
+                scheduleIds, assignment.size());
+    }
+
+    Map<Integer, CouponItem> allocateCoupons(List<ScheduleItem> schedulesAscByDate, List<CouponItem> allCoupons) {
+        Map<Integer, CouponItem> assignment = new LinkedHashMap<>();
+        Set<Integer> consumedCouponIds = new java.util.HashSet<>();
+        for (ScheduleItem schedule : schedulesAscByDate) {
+            String scheduleIdStr = String.valueOf(schedule.getId());
+            List<CouponItem> candidates = allCoupons.stream()
+                    .filter(c -> isUsableCoupon(c, scheduleIdStr))
+                    .filter(c -> !consumedCouponIds.contains(c.getId()))
+                    .toList();
+            if (candidates.isEmpty()) {
+                continue;
+            }
+            Optional<CouponItem> verified = tryVerifyCoupon(candidates, schedule.getId());
+            if (verified.isPresent()) {
+                assignment.put(schedule.getId(), verified.get());
+                consumedCouponIds.add(verified.get().getId());
+            }
+        }
+        return assignment;
     }
 
     public boolean tryCreateOrder(ScheduleItem schedule) {
@@ -97,7 +179,8 @@ public class OrderService {
     }
 
     List<CouponItem> findUsableCoupons(int routeId, int scheduleId, int boardingPointId) {
-        List<CouponItem> allCoupons = apiClient.getCoupons(routeId, List.of(scheduleId), boardingPointId);
+        List<CouponItem> allCoupons = findUsableCouponsForSchedules(
+                routeId, List.of(scheduleId), boardingPointId);
         String scheduleIdStr = String.valueOf(scheduleId);
 
         return allCoupons.stream()
@@ -121,13 +204,32 @@ public class OrderService {
     }
 
     CreateOrderResponse placeOrder(int scheduleId, Optional<CouponItem> coupon) {
+        Map<Integer, CouponItem> assignment = coupon
+                .map(c -> Map.of(scheduleId, c))
+                .orElse(Map.of());
+        return placeMultiScheduleOrder(List.of(scheduleId), assignment);
+    }
+
+    CreateOrderResponse placeMultiScheduleOrder(List<Integer> scheduleIds, Map<Integer, CouponItem> assignment) {
+        return apiClient.createOrder(buildCreateOrderRequest(scheduleIds, assignment));
+    }
+
+    private CreateOrderRequest buildCreateOrderRequest(List<Integer> scheduleIds, Map<Integer, CouponItem> assignment) {
         CreateOrderRequest request = new CreateOrderRequest();
         request.setRouteId(properties.getRouteId());
         request.setBoardingPointId(properties.getBoardingPointId());
         request.setAlightingPointId(properties.getAlightingPointId());
-        request.setScheduleIds(List.of(scheduleId));
-        request.setCouponIds(buildCouponIds(scheduleId, coupon));
-        return apiClient.createOrder(request);
+        request.setScheduleIds(scheduleIds);
+        request.setCouponIds(buildMultiCouponIds(assignment));
+        return request;
+    }
+
+    private static String toJson(Object obj) {
+        try {
+            return OBJECT_MAPPER.writeValueAsString(obj);
+        } catch (Exception e) {
+            return obj.toString();
+        }
     }
 
     private boolean matchesOrder(OrderItem order, String routeName, LocalDate date) {
@@ -161,21 +263,51 @@ public class OrderService {
     private String formatUnpaidOrderInfo(List<OrderItem> unpaidOrders) {
         StringBuilder sb = new StringBuilder();
         for (OrderItem order : unpaidOrders) {
-            String date = order.getDescription().getDate().get(0);
-            sb.append("你有待支付的订单，乘车日期: ").append(date)
+            String dates = String.join(", ", order.getDescription().getDate());
+            sb.append("你有待支付的订单，乘车日期: ").append(dates)
               .append("，路线: ").append(order.getRouteName())
               .append("，车票监控暂停，请付款后重新开启车票监控\n");
         }
         return sb.toString().trim();
     }
 
-    private Map<String, Map<String, Integer>> buildCouponIds(int scheduleId, Optional<CouponItem> coupon) {
-        if (coupon.isEmpty()) {
+    private static Map<String, Map<String, Integer>> buildMultiCouponIds(Map<Integer, CouponItem> assignment) {
+        if (assignment == null || assignment.isEmpty()) {
             return Map.of();
         }
-        CouponItem c = coupon.get();
-        String scheduleIdStr = String.valueOf(scheduleId);
-        String categoryIdStr = String.valueOf(c.getCouponCategoryId());
-        return Map.of(scheduleIdStr, Map.of(categoryIdStr, c.getId()));
+        Map<String, Map<String, Integer>> result = new LinkedHashMap<>();
+        for (Map.Entry<Integer, CouponItem> entry : assignment.entrySet()) {
+            CouponItem coupon = entry.getValue();
+            String scheduleIdStr = String.valueOf(entry.getKey());
+            String categoryIdStr = String.valueOf(coupon.getCouponCategoryId());
+            result.put(scheduleIdStr, Map.of(categoryIdStr, coupon.getId()));
+        }
+        return result;
+    }
+
+    private static List<ScheduleItem> dedupeById(List<ScheduleItem> schedules) {
+        return schedules.stream()
+                .collect(Collectors.toMap(
+                        ScheduleItem::getId,
+                        Function.identity(),
+                        (a, b) -> a,
+                        LinkedHashMap::new))
+                .values().stream().toList();
+    }
+
+    private static LocalDateTime departureTimeOf(ScheduleItem schedule) {
+        LocalDate date = LocalDate.parse(schedule.getDate(), SCHEDULE_DATE_FORMAT);
+        LocalTime time = LocalTime.parse(schedule.getTime());
+        return LocalDateTime.of(date, time);
+    }
+
+    private static List<Integer> idsOf(List<ScheduleItem> schedules) {
+        return schedules.stream().map(ScheduleItem::getId).toList();
+    }
+
+    private static Map<Integer, Integer> assignmentSummary(Map<Integer, CouponItem> assignment) {
+        Map<Integer, Integer> out = new LinkedHashMap<>();
+        assignment.forEach((scheduleId, coupon) -> out.put(scheduleId, coupon.getId()));
+        return out;
     }
 }

@@ -21,6 +21,10 @@ import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.*;
 
@@ -58,7 +62,7 @@ class TicketMonitorServiceTest {
                 .willReturn(Map.of("07:40", List.of(item25, item26)));
 
         given(orderService.findPaidOrderDates(eq(275), anyInt(), any())).willReturn(Set.of());
-        given(orderService.tryCreateOrder(any())).willReturn(true);
+        given(orderService.tryCreateMultiScheduleOrder(anyList())).willReturn(true);
 
         List<LocalDate> targetDates = List.of(
                 LocalDate.of(2026, 3, 25),
@@ -69,8 +73,8 @@ class TicketMonitorServiceTest {
         // when
         monitorService.executeMonitorCycle(targetDates);
 
-        // then: only 2 dates should be processed (03-25 and 03-26)
-        verify(orderService, times(2)).tryCreateOrder(any());
+        // then: a single merged call containing both available schedules
+        verify(orderService, times(1)).tryCreateMultiScheduleOrder(List.of(item25, item26));
     }
 
     @Test
@@ -84,7 +88,7 @@ class TicketMonitorServiceTest {
                 .willReturn(Map.of("07:40", List.of(withTickets, noTickets)));
 
         given(orderService.findPaidOrderDates(eq(275), anyInt(), any())).willReturn(Set.of());
-        given(orderService.tryCreateOrder(any())).willReturn(true);
+        given(orderService.tryCreateMultiScheduleOrder(anyList())).willReturn(true);
 
         List<LocalDate> targetDates = List.of(
                 LocalDate.of(2026, 3, 25),
@@ -94,12 +98,12 @@ class TicketMonitorServiceTest {
         // when
         monitorService.executeMonitorCycle(targetDates);
 
-        // then: only 03-25 with number > 0
-        verify(orderService, times(1)).tryCreateOrder(any());
+        // then: only the schedule with number > 0 reaches the order service
+        verify(orderService, times(1)).tryCreateMultiScheduleOrder(List.of(withTickets));
     }
 
     @Test
-    void should_call_order_service_for_each_available_date() {
+    void should_pass_all_available_schedules_to_order_service_in_one_call() {
         // given
         given(properties.getRouteId()).willReturn(275);
 
@@ -109,7 +113,7 @@ class TicketMonitorServiceTest {
                 .willReturn(Map.of("07:40", List.of(item25, item26)));
 
         given(orderService.findPaidOrderDates(eq(275), anyInt(), any())).willReturn(Set.of());
-        given(orderService.tryCreateOrder(any())).willReturn(true);
+        given(orderService.tryCreateMultiScheduleOrder(anyList())).willReturn(true);
 
         List<LocalDate> targetDates = List.of(
                 LocalDate.of(2026, 3, 25),
@@ -119,14 +123,14 @@ class TicketMonitorServiceTest {
         // when
         monitorService.executeMonitorCycle(targetDates);
 
-        // then
-        verify(orderService).tryCreateOrder(item25);
-        verify(orderService).tryCreateOrder(item26);
+        // then: single batched call carrying both schedules (002 — replaces N×tryCreateOrder)
+        verify(orderService, times(1)).tryCreateMultiScheduleOrder(List.of(item25, item26));
+        verify(orderService, never()).tryCreateOrder(any(ScheduleItem.class));
     }
 
     @Test
-    void should_continue_processing_next_date_when_one_fails() {
-        // given
+    void should_swallow_exception_from_multi_schedule_order_without_crashing_scheduler() {
+        // given: 单一原子调用，失败时不应让异常逃逸到 scheduler 杀死监控
         given(properties.getRouteId()).willReturn(275);
 
         ScheduleItem item25 = createSchedule(61429, "2026/3/25", 1);
@@ -135,19 +139,17 @@ class TicketMonitorServiceTest {
                 .willReturn(Map.of("07:40", List.of(item25, item26)));
 
         given(orderService.findPaidOrderDates(eq(275), anyInt(), any())).willReturn(Set.of());
-        given(orderService.tryCreateOrder(item25)).willThrow(new BusinessException("网络超时"));
-        given(orderService.tryCreateOrder(item26)).willReturn(true);
+        given(orderService.tryCreateMultiScheduleOrder(anyList()))
+                .willThrow(new BusinessException("网络超时"));
 
         List<LocalDate> targetDates = List.of(
                 LocalDate.of(2026, 3, 25),
                 LocalDate.of(2026, 3, 26)
         );
 
-        // when
+        // when & then: must not throw
         monitorService.executeMonitorCycle(targetDates);
-
-        // then: item26 should still be processed
-        verify(orderService).tryCreateOrder(item26);
+        verify(orderService, times(1)).tryCreateMultiScheduleOrder(List.of(item25, item26));
     }
 
     @Test
@@ -160,7 +162,7 @@ class TicketMonitorServiceTest {
                 .willReturn(Map.of("07:40", List.of(item25)));
 
         given(orderService.findPaidOrderDates(eq(275), anyInt(), any())).willReturn(Set.of());
-        given(orderService.tryCreateOrder(item25)).willReturn(true);
+        given(orderService.tryCreateMultiScheduleOrder(List.of(item25))).willReturn(true);
         given(orderService.getLastCreatedOrderId()).willReturn(572468);
 
         List<LocalDate> targetDates = List.of(LocalDate.of(2026, 3, 25));
@@ -182,7 +184,7 @@ class TicketMonitorServiceTest {
                 .willReturn(Map.of("07:40", List.of(item25)));
 
         given(orderService.findPaidOrderDates(eq(275), anyInt(), any())).willReturn(Set.of());
-        given(orderService.tryCreateOrder(item25)).willReturn(true);
+        given(orderService.tryCreateMultiScheduleOrder(List.of(item25))).willReturn(true);
         given(orderService.getLastCreatedOrderId()).willReturn(572468);
         given(ticketLogService.logTicketPurchase(572468))
                 .willReturn("----------------------------------------\n日期: 2026/3/25\n");
@@ -207,7 +209,7 @@ class TicketMonitorServiceTest {
                 .willReturn(Map.of("07:40", List.of(item25)));
 
         given(orderService.findPaidOrderDates(eq(275), anyInt(), any())).willReturn(Set.of());
-        given(orderService.tryCreateOrder(item25)).willReturn(false);
+        given(orderService.tryCreateMultiScheduleOrder(List.of(item25))).willReturn(false);
 
         List<LocalDate> targetDates = List.of(LocalDate.of(2026, 3, 25));
 
@@ -228,7 +230,7 @@ class TicketMonitorServiceTest {
                 .willReturn(Map.of("07:40", List.of(item25)));
 
         given(orderService.findPaidOrderDates(eq(275), anyInt(), any())).willReturn(Set.of());
-        given(orderService.tryCreateOrder(item25)).willReturn(false);
+        given(orderService.tryCreateMultiScheduleOrder(List.of(item25))).willReturn(false);
 
         List<LocalDate> targetDates = List.of(LocalDate.of(2026, 3, 25));
 
@@ -257,7 +259,8 @@ class TicketMonitorServiceTest {
         monitorService.executeMonitorCycle(targetDates);
 
         // then: no order attempts, monitor should stop
-        verify(orderService, never()).tryCreateOrder(any());
+        verify(orderService, never()).tryCreateMultiScheduleOrder(anyList());
+        verify(orderService, never()).tryCreateOrder(any(ScheduleItem.class));
         verify(ticketLogService).writeUnpaidOrderWarning("你有待支付的订单");
     }
 
@@ -277,7 +280,7 @@ class TicketMonitorServiceTest {
 
         // then: no paid order check, no order attempts
         verify(orderService, never()).findPaidOrderDates(anyInt(), anyInt(), any());
-        verify(orderService, never()).tryCreateOrder(any());
+        verify(orderService, never()).tryCreateMultiScheduleOrder(anyList());
     }
 
     // === paid order pre-check ===
@@ -295,7 +298,7 @@ class TicketMonitorServiceTest {
         given(orderService.findPaidOrderDates(eq(275), anyInt(), any()))
                 .willReturn(Set.of(LocalDate.of(2026, 3, 25)));
 
-        given(orderService.tryCreateOrder(any())).willReturn(true);
+        given(orderService.tryCreateMultiScheduleOrder(anyList())).willReturn(true);
 
         List<LocalDate> targetDates = List.of(
                 LocalDate.of(2026, 3, 25),
@@ -305,9 +308,8 @@ class TicketMonitorServiceTest {
         // when
         monitorService.executeMonitorCycle(targetDates);
 
-        // then: only 03-26 should be processed, 03-25 excluded
-        verify(orderService, never()).tryCreateOrder(item25);
-        verify(orderService).tryCreateOrder(item26);
+        // then: only 03-26 should be in the merged call; 03-25 excluded
+        verify(orderService, times(1)).tryCreateMultiScheduleOrder(List.of(item26));
     }
 
     @Test
@@ -328,7 +330,7 @@ class TicketMonitorServiceTest {
         monitorService.executeMonitorCycle(targetDates);
 
         // then: no order attempts
-        verify(orderService, never()).tryCreateOrder(any());
+        verify(orderService, never()).tryCreateMultiScheduleOrder(anyList());
     }
 
     @Test
@@ -343,7 +345,7 @@ class TicketMonitorServiceTest {
         given(orderService.findPaidOrderDates(eq(275), anyInt(), any()))
                 .willReturn(Set.of());
 
-        given(orderService.tryCreateOrder(any())).willReturn(true);
+        given(orderService.tryCreateMultiScheduleOrder(anyList())).willReturn(true);
 
         List<LocalDate> targetDates = List.of(LocalDate.of(2026, 3, 25));
 
@@ -351,7 +353,7 @@ class TicketMonitorServiceTest {
         monitorService.executeMonitorCycle(targetDates);
 
         // then
-        verify(orderService).tryCreateOrder(item25);
+        verify(orderService).tryCreateMultiScheduleOrder(List.of(item25));
     }
 
     // === startMonitor / stopMonitor (3.4.3) ===
@@ -458,6 +460,136 @@ class TicketMonitorServiceTest {
 
         // then: error must not propagate (would kill the scheduler)
         assertThat(shouldStop).isFalse();
+    }
+
+    // === Stop monitor on successful purchase ===
+
+    @Test
+    void should_return_true_from_execute_monitor_cycle_when_purchase_succeeds() {
+        // given
+        given(properties.getRouteId()).willReturn(275);
+
+        ScheduleItem item25 = createSchedule(61429, "2026/3/25", 1);
+        given(apiClient.findSchedules(275))
+                .willReturn(Map.of("07:40", List.of(item25)));
+        given(orderService.findPaidOrderDates(eq(275), anyInt(), any())).willReturn(Set.of());
+        given(orderService.tryCreateMultiScheduleOrder(List.of(item25))).willReturn(true);
+        given(orderService.getLastCreatedOrderId()).willReturn(572468);
+
+        // when
+        boolean purchased = monitorService.executeMonitorCycle(
+                List.of(LocalDate.of(2026, 3, 25)));
+
+        // then
+        assertThat(purchased).isTrue();
+    }
+
+    @Test
+    void should_return_false_from_execute_monitor_cycle_when_no_purchase_made() {
+        // given: no schedules available
+        given(properties.getRouteId()).willReturn(275);
+        ScheduleItem noTickets = createSchedule(61430, "2026/3/25", 0);
+        given(apiClient.findSchedules(275))
+                .willReturn(Map.of("07:40", List.of(noTickets)));
+
+        // when
+        boolean purchased = monitorService.executeMonitorCycle(
+                List.of(LocalDate.of(2026, 3, 25)));
+
+        // then
+        assertThat(purchased).isFalse();
+    }
+
+    @Test
+    void should_return_false_from_execute_monitor_cycle_when_order_attempt_returns_false() {
+        // given: schedule available but order creation skipped (e.g. all departed during the cycle)
+        given(properties.getRouteId()).willReturn(275);
+        ScheduleItem item25 = createSchedule(61429, "2026/3/25", 1);
+        given(apiClient.findSchedules(275))
+                .willReturn(Map.of("07:40", List.of(item25)));
+        given(orderService.findPaidOrderDates(eq(275), anyInt(), any())).willReturn(Set.of());
+        given(orderService.tryCreateMultiScheduleOrder(List.of(item25))).willReturn(false);
+
+        // when
+        boolean purchased = monitorService.executeMonitorCycle(
+                List.of(LocalDate.of(2026, 3, 25)));
+
+        // then
+        assertThat(purchased).isFalse();
+    }
+
+    @Test
+    void should_return_false_from_execute_monitor_cycle_when_order_attempt_throws() {
+        // given
+        given(properties.getRouteId()).willReturn(275);
+        ScheduleItem item25 = createSchedule(61429, "2026/3/25", 1);
+        given(apiClient.findSchedules(275))
+                .willReturn(Map.of("07:40", List.of(item25)));
+        given(orderService.findPaidOrderDates(eq(275), anyInt(), any())).willReturn(Set.of());
+        given(orderService.tryCreateMultiScheduleOrder(List.of(item25)))
+                .willThrow(new BusinessException("网络超时"));
+
+        // when
+        boolean purchased = monitorService.executeMonitorCycle(
+                List.of(LocalDate.of(2026, 3, 25)));
+
+        // then: scheduler must keep running on failure
+        assertThat(purchased).isFalse();
+    }
+
+    // === 002 multi-schedule order — monitor batches all available schedules into one call ===
+
+    @Test
+    void should_invoke_create_multi_schedule_order_once_when_two_available_schedules() {
+        // given
+        given(properties.getRouteId()).willReturn(275);
+
+        ScheduleItem item25 = createSchedule(61429, "2026/3/25", 1);
+        ScheduleItem item26 = createSchedule(61430, "2026/3/26", 1);
+        given(apiClient.findSchedules(275))
+                .willReturn(Map.of("07:40", List.of(item25, item26)));
+
+        given(orderService.findPaidOrderDates(eq(275), anyInt(), any())).willReturn(Set.of());
+        given(orderService.tryCreateMultiScheduleOrder(anyList())).willReturn(true);
+
+        List<LocalDate> targetDates = List.of(
+                LocalDate.of(2026, 3, 25),
+                LocalDate.of(2026, 3, 26));
+
+        // when
+        monitorService.executeMonitorCycle(targetDates);
+
+        // then: 仅一次 tryCreateMultiScheduleOrder 调用，参数为两条有票车次
+        verify(orderService, times(1))
+                .tryCreateMultiScheduleOrder(List.of(item25, item26));
+        verify(orderService, never()).tryCreateOrder(any(ScheduleItem.class));
+    }
+
+    @Test
+    void should_send_single_webhook_and_log_when_merged_order_succeeds() {
+        // given
+        given(properties.getRouteId()).willReturn(275);
+
+        ScheduleItem item25 = createSchedule(61429, "2026/3/25", 1);
+        ScheduleItem item26 = createSchedule(61430, "2026/3/26", 1);
+        given(apiClient.findSchedules(275))
+                .willReturn(Map.of("07:40", List.of(item25, item26)));
+
+        given(orderService.findPaidOrderDates(eq(275), anyInt(), any())).willReturn(Set.of());
+        given(orderService.tryCreateMultiScheduleOrder(anyList())).willReturn(true);
+        given(orderService.getLastCreatedOrderId()).willReturn(999001);
+        given(ticketLogService.logTicketPurchase(999001))
+                .willReturn("----------------------------------------\n日期: 2026/3/25\n日期: 2026/3/26\n");
+
+        // when
+        monitorService.executeMonitorCycle(List.of(
+                LocalDate.of(2026, 3, 25),
+                LocalDate.of(2026, 3, 26)));
+
+        // then: 一次日志 + 一次 webhook（FR-006）
+        verify(ticketLogService, times(1)).logTicketPurchase(999001);
+        verify(openClawWebhookClient, times(1)).notifyTicketPurchase(
+                "----------------------------------------\n日期: 2026/3/25\n日期: 2026/3/26\n");
     }
 
     private RouteStopsResponse routeStops(String routeName) {

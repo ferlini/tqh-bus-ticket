@@ -64,12 +64,14 @@ public class TicketLogService {
     }
 
     private String formatLogEntry(OrderItem order) {
-        String date = order.getDescription().getDate().get(0);
-        return SEPARATOR
-                + "日期: " + date + "\n"
-                + "路线: " + order.getRouteName() + "\n"
-                + "上车站: " + order.getDescription().getStartStop() + "\n"
-                + "下车站: " + order.getDescription().getEndStop() + "\n";
+        StringBuilder sb = new StringBuilder(SEPARATOR);
+        for (String date : order.getDescription().getDate()) {
+            sb.append("日期: ").append(date).append("\n");
+        }
+        sb.append("路线: ").append(order.getRouteName()).append("\n")
+          .append("上车站: ").append(order.getDescription().getStartStop()).append("\n")
+          .append("下车站: ").append(order.getDescription().getEndStop()).append("\n");
+        return sb.toString();
     }
 
     private void writeToFile(String content) {

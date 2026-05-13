@@ -38,6 +38,7 @@ public class OpenClawWebhookClient {
 
     public void notifyTicketPurchase(String purchaseMessage) {
         Map<String, String> payload = buildPayload(purchaseMessage);
+        log.debug("OpenClaw webhook 请求报文 (购票通知) -> {}: {}", properties.getUrl(), toJson(payload));
         try {
             restClient.post()
                     .uri(properties.getUrl())
@@ -63,6 +64,7 @@ public class OpenClawWebhookClient {
 
     public boolean notifyTicketAvailable(String availabilityMessage) {
         Map<String, String> payload = buildAvailabilityPayload(availabilityMessage);
+        log.debug("OpenClaw webhook 请求报文 (有票通知) -> {}: {}", properties.getUrl(), toJson(payload));
         try {
             String body = restClient.post()
                     .uri(properties.getUrl())
@@ -90,6 +92,14 @@ public class OpenClawWebhookClient {
                 "message", message,
                 "name", properties.getName(),
                 "channel", properties.getChannel());
+    }
+
+    private String toJson(Object obj) {
+        try {
+            return objectMapper.writeValueAsString(obj);
+        } catch (Exception e) {
+            return obj.toString();
+        }
     }
 
     boolean isOkResponse(String body) {

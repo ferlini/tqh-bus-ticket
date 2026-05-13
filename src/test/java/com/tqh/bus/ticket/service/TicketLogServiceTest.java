@@ -106,6 +106,39 @@ class TicketLogServiceTest {
     }
 
     @Test
+    void should_list_all_dates_when_order_has_multiple_dates() throws IOException {
+        // given: 合并下单后，订单的 description.date 包含多个日期
+        OrderItem order = new OrderItem();
+        order.setId(999001);
+        order.setRouteName("17号线-明珠线-上班");
+        OrderDescription desc = new OrderDescription();
+        desc.setStartStop("长沙圩①");
+        desc.setEndStop("科创中心西门");
+        desc.setDate(List.of(
+                "2026-03-25 07:40:00",
+                "2026-03-26 07:40:00",
+                "2026-03-27 07:40:00"));
+        order.setDescription(desc);
+        given(apiClient.getOrders("", 1, 10)).willReturn(List.of(order));
+
+        // when
+        String message = logService.logTicketPurchase(999001);
+
+        // then: 三个日期都出现在文案中（FR-006：文案 MUST 列出本次订单包含的全部日期）
+        assertThat(message).contains("2026-03-25 07:40:00");
+        assertThat(message).contains("2026-03-26 07:40:00");
+        assertThat(message).contains("2026-03-27 07:40:00");
+        // 日志文件内容亦然
+        String content = Files.readString(logFile);
+        assertThat(content).contains("2026-03-25 07:40:00");
+        assertThat(content).contains("2026-03-26 07:40:00");
+        assertThat(content).contains("2026-03-27 07:40:00");
+        // 路线、上下车站只出现一次（不应被复制三遍）
+        assertThat(content).containsOnlyOnce("路线: 17号线-明珠线-上班");
+        assertThat(content).containsOnlyOnce("上车站: 长沙圩①");
+    }
+
+    @Test
     void should_clear_log_file() throws IOException {
         // given
         Files.writeString(logFile, "some existing content");
