@@ -10,6 +10,8 @@ public class OpenClawWebhookProperties {
     private String url;
     private String token;
     private String channel;
+    private String name;
+    private String target;
 
     public String getUrl() {
         return url;
@@ -33,5 +35,21 @@ public class OpenClawWebhookProperties {
 
     public void setChannel(String channel) {
         this.channel = channel;
+    }
+
+    public String getName() {
+        return name;
+    }
+
+    public void setName(String name) {
+        this.name = name;
+    }
+
+    public String getTarget() {
+        return target;
+    }
+
+    public void setTarget(String target) {
+        this.target = target;
     }
 }

@@ -22,6 +22,8 @@ tqh:
 
 openclaw:
   webhook:
-    url: http://127.0.0.1:18789/hooks/wake
+    url: http://127.0.0.1:18789/hooks/agent
     token: "请手动配置"
-    channel: "请手动配置"
+    name: "main"
+    channel: "openclaw-weixin"
+    target: "请手动配置"
