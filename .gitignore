@@ -1,6 +1,7 @@
 .claude/settings.local.json
 .vscode/
 .idea/
+tmp/
 *.DS_Store
 
 # Maven

@@ -231,3 +231,10 @@ class UserServiceTest {
 
 *本文件版本由项目团队共同维护，修改须经团队评审。*
 *最高原则请以 `constitution.md` 为准。*
+
+## Active Technologies
+- Java 21 (LTS) — 项目宪法约束 + Spring Boot 3.4.4（spring-boot-starter-web）、Jackson、`RestClient`；测试侧 JUnit 5 + Mockito + AssertJ + Spring `MockRestServiceServer`；**不引入新依赖** (002-multi-schedule-order)
+- N/A — 状态来自外部 TQH API，购票日志由现有 `TicketLogService` 追加写入文件 `./logs/ticket.log` (002-multi-schedule-order)
+
+## Recent Changes
+- 002-multi-schedule-order: Added Java 21 (LTS) — 项目宪法约束 + Spring Boot 3.4.4（spring-boot-starter-web）、Jackson、`RestClient`；测试侧 JUnit 5 + Mockito + AssertJ + Spring `MockRestServiceServer`；**不引入新依赖**

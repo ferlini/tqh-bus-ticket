@@ -83,7 +83,12 @@ public class TicketMonitorService {
         stopMonitor();
         log.info("启动监控，目标日期: {}，间隔: {}秒", targetDates, properties.getMonitorInterval());
         currentTask = scheduler.scheduleWithFixedDelay(
-                () -> executeMonitorCycle(targetDates),
+                () -> {
+                    if (executeMonitorCycle(targetDates)) {
+                        log.info("购票成功，停止车票监控");
+                        stopMonitor();
+                    }
+                },
                 0,
                 properties.getMonitorInterval(),
                 TimeUnit.SECONDS
@@ -112,7 +117,7 @@ public class TicketMonitorService {
         }
     }
 
-    void executeMonitorCycle(List<LocalDate> targetDates) {
+    boolean executeMonitorCycle(List<LocalDate> targetDates) {
         try {
             log.info("开始监控，目标日期: {}", targetDates);
 
@@ -127,7 +132,7 @@ public class TicketMonitorService {
             log.debug("有票车次: {}个", availableSchedules.size());
             if (availableSchedules.isEmpty()) {
                 log.debug("无有票车次，本轮监控结束");
-                return;
+                return false;
             }
 
             // 检查已支付订单，排除已购票日期的车次
@@ -139,18 +144,19 @@ public class TicketMonitorService {
                         .toList();
                 log.debug("排除已支付日期后，剩余有票车次: {}个", availableSchedules.size());
             }
-            for (ScheduleItem schedule : availableSchedules) {
-                processSchedule(schedule);
-            }
+            boolean purchased = processSchedules(availableSchedules);
             log.debug("本轮监控完成，等待{}秒后开始下一轮", properties.getMonitorInterval());
+            return purchased;
         } catch (UnpaidOrderException e) {
             // 发现待支付订单，写入日志并停止监控
             ticketLogService.writeUnpaidOrderWarning(e.getMessage());
             log.warn("发现待支付订单，监控已停止: {}", e.getMessage());
             stopMonitor();
+            return false;
         } catch (Exception e) {
             // ScheduledExecutor 最外层必须 catch，否则调度会永久停止
             log.error("本轮监控异常: {}", e.getMessage(), e);
+            return false;
         }
     }
 
@@ -165,20 +171,26 @@ public class TicketMonitorService {
                 .toList();
     }
 
-    private void processSchedule(ScheduleItem schedule) {
+    private boolean processSchedules(List<ScheduleItem> schedules) {
+        if (schedules.isEmpty()) {
+            return false;
+        }
         try {
-            log.debug("开始处理车次: id={}, 日期={}, 余票={}", schedule.getId(), schedule.getDate(), schedule.getNumber());
-            boolean created = orderService.tryCreateOrder(schedule);
+            log.debug("开始合并处理车次: ids={}, count={}",
+                    schedules.stream().map(ScheduleItem::getId).toList(), schedules.size());
+            boolean created = orderService.tryCreateMultiScheduleOrder(schedules);
             if (created) {
                 String purchaseMessage = ticketLogService.logTicketPurchase(orderService.getLastCreatedOrderId());
                 openClawWebhookClient.notifyTicketPurchase(purchaseMessage);
             }
+            return created;
         } catch (UnpaidOrderException e) {
             // 待支付订单异常必须向上抛出，终止监控循环
             throw e;
         } catch (Exception e) {
-            // 单个日期失败不中断其他日期的处理，下一轮会重新尝试
-            log.error("处理车次 {} 异常: {}", schedule.getDate(), e.getMessage(), e);
+            // 本轮失败不中断 scheduler，下一轮会重新尝试
+            log.error("合并处理车次异常: count={}, msg={}", schedules.size(), e.getMessage(), e);
+            return false;
         }
     }
 

@@ -18,7 +18,6 @@ import java.util.Map;
 public class OpenClawWebhookClient {
 
     private static final Logger log = LoggerFactory.getLogger(OpenClawWebhookClient.class);
-    private static final String SEND_MODE = "now";
 
     private final OpenClawWebhookProperties properties;
     private final RestClient restClient;
@@ -39,6 +38,7 @@ public class OpenClawWebhookClient {
 
     public void notifyTicketPurchase(String purchaseMessage) {
         Map<String, String> payload = buildPayload(purchaseMessage);
+        log.debug("OpenClaw webhook 请求报文 (购票通知) -> {}: {}", properties.getUrl(), toJson(payload));
         try {
             restClient.post()
                     .uri(properties.getUrl())
@@ -47,7 +47,7 @@ public class OpenClawWebhookClient {
                     .body(payload)
                     .retrieve()
                     .toBodilessEntity();
-            log.info("OpenClaw webhook 通知已发送, channel={}", properties.getChannel());
+            log.info("OpenClaw webhook 通知已发送, channel={}, target={}", properties.getChannel(), properties.getTarget());
         } catch (Exception e) {
             // 购票主流程已成功，webhook 仅用于通知。降级处理：记录失败但不中断调用方。
             log.error("OpenClaw webhook 通知失败: {}", e.getMessage(), e);
@@ -55,12 +55,16 @@ public class OpenClawWebhookClient {
     }
 
     Map<String, String> buildPayload(String purchaseMessage) {
-        String text = "给 " + properties.getChannel() + " 发送内容并适当的美化：你好，刚买了一张车票，记得付款。\n" + purchaseMessage;
-        return Map.of("text", text, "mode", SEND_MODE);
+        String message = "给 " + properties.getTarget() + " 发送内容并适当的美化：你好，刚买了一张车票，记得付款。\n" + purchaseMessage;
+        return Map.of(
+                "message", message,
+                "name", properties.getName(),
+                "channel", properties.getChannel());
     }
 
     public boolean notifyTicketAvailable(String availabilityMessage) {
         Map<String, String> payload = buildAvailabilityPayload(availabilityMessage);
+        log.debug("OpenClaw webhook 请求报文 (有票通知) -> {}: {}", properties.getUrl(), toJson(payload));
         try {
             String body = restClient.post()
                     .uri(properties.getUrl())
@@ -71,7 +75,7 @@ public class OpenClawWebhookClient {
                     .body(String.class);
             boolean ok = isOkResponse(body);
             if (ok) {
-                log.info("OpenClaw 有票通知已成功发送, channel={}", properties.getChannel());
+                log.info("OpenClaw 有票通知已成功发送, channel={}, target={}", properties.getChannel(), properties.getTarget());
             } else {
                 log.warn("OpenClaw 有票通知响应非 ok=true, body={}", body);
             }
@@ -83,8 +87,19 @@ public class OpenClawWebhookClient {
     }
 
     Map<String, String> buildAvailabilityPayload(String availabilityMessage) {
-        String text = "给 " + properties.getChannel() + " 发送内容并适当的美化：发现以下日期有车票可购买：\n" + availabilityMessage;
-        return Map.of("text", text, "mode", SEND_MODE);
+        String message = "给 " + properties.getTarget() + " 发送内容并适当的美化：发现以下日期有车票可购买：\n" + availabilityMessage;
+        return Map.of(
+                "message", message,
+                "name", properties.getName(),
+                "channel", properties.getChannel());
+    }
+
+    private String toJson(Object obj) {
+        try {
+            return objectMapper.writeValueAsString(obj);
+        } catch (Exception e) {
+            return obj.toString();
+        }
     }
 
     boolean isOkResponse(String body) {

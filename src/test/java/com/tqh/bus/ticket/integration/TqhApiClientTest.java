@@ -282,6 +282,79 @@ class TqhApiClientTest {
         mockServer.verify();
     }
 
+    // === createOrder — multi-schedule (002 feature) ===
+
+    @Test
+    void should_serialize_multi_schedule_create_order_request_correctly() {
+        String responseJson = """
+                {
+                  "code": 200,
+                  "msg": "购票成功",
+                  "data": {
+                    "wx_order_id": 999001,
+                    "is_zero_order": false
+                  }
+                }
+                """;
+
+        mockServer.expect(requestTo("https://api.com/api/v2/order/create"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(jsonPath("$.route_id").value(275))
+                .andExpect(jsonPath("$.boarding_point_id").value(24))
+                .andExpect(jsonPath("$.alighting_point_id").value(400))
+                .andExpect(jsonPath("$.schedule_ids", org.hamcrest.Matchers.contains(61429, 61512)))
+                .andExpect(jsonPath("$.coupon_ids.61429.2").value(8317178))
+                .andExpect(jsonPath("$.coupon_ids.61512.2").value(8190582))
+                .andRespond(withSuccess(responseJson, MediaType.APPLICATION_JSON));
+
+        CreateOrderRequest request = new CreateOrderRequest();
+        request.setRouteId(275);
+        request.setBoardingPointId(24);
+        request.setAlightingPointId(400);
+        request.setScheduleIds(List.of(61429, 61512));
+        request.setCouponIds(Map.of(
+                "61429", Map.of("2", 8317178),
+                "61512", Map.of("2", 8190582)));
+
+        CreateOrderResponse result = apiClient.createOrder(request);
+
+        assertThat(result.getWxOrderId()).isEqualTo(999001);
+        mockServer.verify();
+    }
+
+    @Test
+    void should_serialize_multi_schedule_create_order_with_empty_coupon_ids() {
+        String responseJson = """
+                {
+                  "code": 200,
+                  "msg": "购票成功",
+                  "data": {
+                    "wx_order_id": 999002,
+                    "is_zero_order": false
+                  }
+                }
+                """;
+
+        mockServer.expect(requestTo("https://api.com/api/v2/order/create"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(jsonPath("$.schedule_ids", org.hamcrest.Matchers.contains(61429, 61512)))
+                .andExpect(jsonPath("$.coupon_ids").isMap())
+                .andExpect(jsonPath("$.coupon_ids").isEmpty())
+                .andRespond(withSuccess(responseJson, MediaType.APPLICATION_JSON));
+
+        CreateOrderRequest request = new CreateOrderRequest();
+        request.setRouteId(275);
+        request.setBoardingPointId(24);
+        request.setAlightingPointId(400);
+        request.setScheduleIds(List.of(61429, 61512));
+        request.setCouponIds(Map.of());
+
+        CreateOrderResponse result = apiClient.createOrder(request);
+
+        assertThat(result.getWxOrderId()).isEqualTo(999002);
+        mockServer.verify();
+    }
+
     // === error handling (2.2.13) ===
 
     @Test
